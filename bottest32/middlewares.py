@@ -7,6 +7,8 @@ from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject
 from flyerapi import APIError, Flyer
 
+from .database import db
+
 
 class ThrottlingMiddleware(BaseMiddleware):
     def __init__(self, rate_limit: float = 1.0) -> None:
@@ -55,6 +57,10 @@ class FlyerCheckMiddleware(BaseMiddleware):
         language_code = getattr(user, "language_code", None)
         message_payload = dict(self._message_template)
 
+        user_record = await db.get_user(user.id)
+        if user_record and user_record.flyer_verified:
+            return await handler(event, data)
+
         try:
             is_allowed = await self.flyer.check(
                 user.id,
@@ -70,6 +76,15 @@ class FlyerCheckMiddleware(BaseMiddleware):
 
         if not is_allowed:
             return None
+
+        if user_record is None:
+            await db.create_user(
+                user.id,
+                0,
+                None,
+                getattr(user, "username", None),
+            )
+        await db.set_flyer_verified(user.id, True)
 
         return await handler(event, data)
 
