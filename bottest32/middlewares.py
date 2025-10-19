@@ -108,18 +108,34 @@ class FlyerCheckMiddleware(BaseMiddleware):
             return
 
         chat_id: Optional[int] = None
+        user = data.get("event_from_user")
+        settings = data.get("settings")
+
         if isinstance(event, Message):
             if (event.text or "").startswith("/start"):
                 return
             chat_id = event.chat.id
+            trigger_message: Optional[Message] = event
         elif isinstance(event, CallbackQuery) and event.message:
             chat_id = event.message.chat.id
+            trigger_message = None
+        else:
+            trigger_message = None
 
-        if chat_id is None:
+        if chat_id is None or user is None or settings is None:
             return
 
         with suppress(Exception):
-            await bot.send_message(chat_id, "/start")
+            from .handlers import run_start_flow
+
+            await run_start_flow(
+                bot,
+                settings,
+                user.id,
+                chat_id,
+                getattr(user, "username", None),
+                message=trigger_message,
+            )
 
 
 def mask_sensitive(text: str) -> str:
