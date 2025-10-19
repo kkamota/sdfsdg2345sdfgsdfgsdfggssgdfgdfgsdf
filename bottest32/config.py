@@ -13,6 +13,8 @@ class Settings:
     start_bonus: int = 3
     referral_bonus: int = 3
     daily_bonus: int = 1
+    webhook_host: str = "0.0.0.0"
+    webhook_port: int = 50000
 
 
 def load_settings() -> Settings:
@@ -28,9 +30,14 @@ def load_settings() -> Settings:
         "FLYER_API_KEY",
         "FL-nDnAdz-lUODDB-jYqtsJ-neLImC",
     )
+    webhook_host = os.getenv("WEBHOOK_HOST", "0.0.0.0")
+    webhook_port = int(os.getenv("WEBHOOK_PORT", "50000"))
+
     return Settings(
         bot_token=token,
         channel_username=channel,
         admin_ids=admin_ids or (123456789,),
         flyer_api_key=flyer_api_key,
+        webhook_host=webhook_host,
+        webhook_port=webhook_port,
     )
