@@ -62,6 +62,8 @@ class FlyerCheckMiddleware(BaseMiddleware):
         if user_record and user_record.flyer_verified:
             return await handler(event, data)
 
+        was_verified = bool(user_record.flyer_verified) if user_record else False
+
         try:
             is_allowed = await self.flyer.check(
                 user.id,
@@ -76,7 +78,7 @@ class FlyerCheckMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         if not is_allowed:
-            await self._notify_verification_required(event, data, message_payload)
+            await self._notify_verification_required(event)
             return None
 
         if user_record is None:
@@ -88,64 +90,36 @@ class FlyerCheckMiddleware(BaseMiddleware):
             )
         await db.set_flyer_verified(user.id, True)
 
+        if not was_verified:
+            await self._trigger_start(event, data)
+
         return await handler(event, data)
 
-    async def _notify_verification_required(
-        self,
-        event: TelegramObject,
-        data: Dict[str, Any],
-        payload: Dict[str, Any],
-    ) -> None:
-        text = payload.get("text")
-
+    async def _notify_verification_required(self, event: TelegramObject) -> None:
         if isinstance(event, CallbackQuery):
             with suppress(Exception):
                 await event.answer()
-            target = event.message
-            if target is not None:
-                if await self._send_payload(target.answer, payload):
-                    return
-                if text:
-                    if await self._send_text(target.answer, text):
-                        return
 
-        elif isinstance(event, Message):
-            if await self._send_payload(event.answer, payload):
-                return
-            if text:
-                if await self._send_text(event.answer, text):
-                    return
-
+    async def _trigger_start(
+        self, event: TelegramObject, data: Dict[str, Any]
+    ) -> None:
         bot = data.get("bot")
+        if bot is None:
+            return
+
         chat_id: Optional[int] = None
-        if isinstance(event, CallbackQuery) and event.message:
-            chat_id = event.message.chat.id
-        elif isinstance(event, Message):
+        if isinstance(event, Message):
+            if (event.text or "").startswith("/start"):
+                return
             chat_id = event.chat.id
+        elif isinstance(event, CallbackQuery) and event.message:
+            chat_id = event.message.chat.id
 
-        if bot and chat_id and text:
-            with suppress(Exception):
-                await bot.send_message(chat_id, text)
+        if chat_id is None:
+            return
 
-    @staticmethod
-    async def _send_payload(sender: Callable[..., Any], payload: Dict[str, Any]) -> bool:
-        try:
-            await sender(**payload)
-            return True
-        except TypeError:
-            return False
-        except Exception:
-            logging.exception("Failed to deliver Flyer verification payload")
-            return True
-
-    @staticmethod
-    async def _send_text(sender: Callable[[str], Any], text: str) -> bool:
-        try:
-            await sender(text)
-            return True
-        except Exception:
-            logging.exception("Failed to deliver Flyer verification notice")
-            return False
+        with suppress(Exception):
+            await bot.send_message(chat_id, "/start")
 
 
 def mask_sensitive(text: str) -> str:
