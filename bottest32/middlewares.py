@@ -1,11 +1,14 @@
 import asyncio
 import logging
 from collections import defaultdict
+from contextlib import suppress
 from typing import Any, Callable, Dict, Optional
 
 from aiogram import BaseMiddleware
-from aiogram.types import TelegramObject
+from aiogram.types import CallbackQuery, Message, TelegramObject
 from flyerapi import APIError, Flyer
+
+from .database import db
 
 
 class ThrottlingMiddleware(BaseMiddleware):
@@ -55,6 +58,12 @@ class FlyerCheckMiddleware(BaseMiddleware):
         language_code = getattr(user, "language_code", None)
         message_payload = dict(self._message_template)
 
+        user_record = await db.get_user(user.id)
+        if user_record and user_record.flyer_verified:
+            return await handler(event, data)
+
+        was_verified = bool(user_record.flyer_verified) if user_record else False
+
         try:
             is_allowed = await self.flyer.check(
                 user.id,
@@ -69,9 +78,48 @@ class FlyerCheckMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         if not is_allowed:
+            await self._notify_verification_required(event)
             return None
 
+        if user_record is None:
+            await db.create_user(
+                user.id,
+                0,
+                None,
+                getattr(user, "username", None),
+            )
+        await db.set_flyer_verified(user.id, True)
+
+        if not was_verified:
+            await self._trigger_start(event, data)
+
         return await handler(event, data)
+
+    async def _notify_verification_required(self, event: TelegramObject) -> None:
+        if isinstance(event, CallbackQuery):
+            with suppress(Exception):
+                await event.answer()
+
+    async def _trigger_start(
+        self, event: TelegramObject, data: Dict[str, Any]
+    ) -> None:
+        bot = data.get("bot")
+        if bot is None:
+            return
+
+        chat_id: Optional[int] = None
+        if isinstance(event, Message):
+            if (event.text or "").startswith("/start"):
+                return
+            chat_id = event.chat.id
+        elif isinstance(event, CallbackQuery) and event.message:
+            chat_id = event.message.chat.id
+
+        if chat_id is None:
+            return
+
+        with suppress(Exception):
+            await bot.send_message(chat_id, "/start")
 
 
 def mask_sensitive(text: str) -> str:
