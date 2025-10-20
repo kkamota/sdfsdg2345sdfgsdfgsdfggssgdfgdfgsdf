@@ -1,9 +1,11 @@
 import asyncio
 import logging
+from contextlib import suppress
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+import uvicorn
 
 from flyerapi import Flyer
 
@@ -11,6 +13,7 @@ from .config import Settings, load_settings
 from .database import db
 from .handlers import register_handlers
 from .middlewares import FlyerCheckMiddleware, ThrottlingMiddleware
+from .webhook import create_app
 
 
 async def on_startup(bot: Bot) -> None:
@@ -40,7 +43,26 @@ async def main() -> None:
 
     dp.startup.register(on_startup)
 
-    await dp.start_polling(bot)
+    app = create_app(bot, settings)
+    config = uvicorn.Config(
+        app,
+        host=settings.webhook_host,
+        port=settings.webhook_port,
+        loop="asyncio",
+        log_level="info",
+    )
+    server = uvicorn.Server(config)
+    server.install_signal_handlers = False
+
+    server_task = asyncio.create_task(server.serve())
+
+    try:
+        await dp.start_polling(bot)
+    finally:
+        if not server.should_exit:
+            server.should_exit = True
+        with suppress(asyncio.CancelledError):
+            await server_task
 
 
 if __name__ == "__main__":
