@@ -97,6 +97,31 @@ class Database:
             flyer_verified=bool(row[9]),
         )
 
+    async def get_user_by_username(self, username: str) -> Optional[User]:
+        row = await self._fetchone(
+            """
+            SELECT telegram_id, balance, referred_by, is_subscribed, reward_claimed,
+                   last_daily_bonus, username, is_banned, start_bonus_claimed, flyer_verified
+            FROM users
+            WHERE username = ? COLLATE NOCASE
+            """,
+            (username,),
+        )
+        if row is None:
+            return None
+        return User(
+            telegram_id=row[0],
+            balance=row[1],
+            referred_by=row[2],
+            is_subscribed=bool(row[3]),
+            reward_claimed=bool(row[4]),
+            last_daily_bonus=row[5],
+            username=row[6],
+            is_banned=bool(row[7]),
+            start_bonus_claimed=bool(row[8]),
+            flyer_verified=bool(row[9]),
+        )
+
     async def create_user(
         self,
         telegram_id: int,
