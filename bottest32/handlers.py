@@ -42,6 +42,10 @@ class AdminReplyStates(StatesGroup):
     waiting_for_reply = State()
 
 
+class AdminGrantStarsStates(StatesGroup):
+    waiting_for_details = State()
+
+
 async def _ensure_user_record(
     telegram_id: int,
     settings: Settings,
@@ -861,6 +865,100 @@ async def admin_broadcast_start(
         reply_markup=admin_menu_keyboard(),
     )
     await callback.answer()
+
+
+@router.callback_query(F.data == "admin_grant_stars")
+async def admin_grant_stars_start(
+    callback: CallbackQuery, settings: Settings, state: FSMContext
+) -> None:
+    if callback.from_user.id not in settings.admin_ids:
+        await callback.answer("Доступ запрещен", show_alert=True)
+        return
+
+    await state.set_state(AdminGrantStarsStates.waiting_for_details)
+    await callback.message.edit_text(
+        (
+            "Введите через пробел ID пользователя или @username и количество ⭐,\n"
+            "например: 123456789 50.\n"
+            "Для отмены введите /cancel."
+        ),
+        reply_markup=admin_menu_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.message(AdminGrantStarsStates.waiting_for_details)
+async def admin_grant_stars_apply(
+    message: Message, settings: Settings, state: FSMContext
+) -> None:
+    if message.from_user.id not in settings.admin_ids:
+        await message.answer("Доступ запрещен.")
+        return
+
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("Укажите данные в формате: ID количество")
+        return
+
+    if text.lower() in {"/cancel", "отмена"}:
+        await state.clear()
+        await message.answer(
+            "Начисление отменено.", reply_markup=admin_menu_keyboard()
+        )
+        return
+
+    parts = text.split()
+    if len(parts) != 2:
+        await message.answer(
+            "Некорректный формат. Укажите ID (или @username) и количество через пробел."
+        )
+        return
+
+    user_ref, amount_text = parts
+    if user_ref.startswith("@"):
+        username = user_ref.lstrip("@")
+        user = await db.get_user_by_username(username)
+    else:
+        try:
+            telegram_id = int(user_ref)
+        except ValueError:
+            await message.answer("ID пользователя должен быть числом.")
+            return
+        user = await db.get_user(telegram_id)
+
+    if user is None:
+        await message.answer("Пользователь не найден в базе данных.")
+        return
+
+    try:
+        amount = int(amount_text)
+    except ValueError:
+        await message.answer("Количество ⭐ должно быть целым числом.")
+        return
+
+    if amount <= 0:
+        await message.answer("Количество ⭐ должно быть положительным.")
+        return
+
+    await db.update_balance(user.telegram_id, amount)
+
+    with suppress(TelegramBadRequest, TelegramForbiddenError):
+        await message.bot.send_message(
+            user.telegram_id,
+            (
+                f"Администрация начислила {amount} ⭐ на ваш баланс.\n"
+                "Если у вас есть вопросы, свяжитесь с поддержкой."
+            ),
+        )
+
+    await state.clear()
+    await message.answer(
+        (
+            f"У пользователя ID {user.telegram_id} начислено {amount} ⭐.\n"
+            "Уведомление отправлено."
+        ),
+        reply_markup=admin_menu_keyboard(),
+    )
 
 
 @router.message(AdminBroadcastStates.waiting_for_message)
