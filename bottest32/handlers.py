@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime
 from contextlib import suppress
-from typing import Optional
+from typing import Any, Optional
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.enums import ChatMemberStatus, ChatType
@@ -205,6 +205,92 @@ async def ensure_subscription_access(
     return True
 
 
+async def _send_start_reply(
+    message: Optional[Message],
+    bot: Bot,
+    chat_id: int,
+    text: str,
+    **kwargs: Any,
+) -> Message:
+    if message is not None:
+        return await message.answer(text, **kwargs)
+    return await bot.send_message(chat_id, text, **kwargs)
+
+
+async def run_start_flow(
+    bot: Bot,
+    settings: Settings,
+    telegram_id: int,
+    chat_id: int,
+    username: Optional[str],
+    *,
+    referred_by: Optional[int] = None,
+    message: Optional[Message] = None,
+) -> None:
+    user, created = await _ensure_user_record(
+        telegram_id,
+        settings,
+        username,
+        referred_by,
+    )
+    if user.is_banned:
+        await _send_start_reply(
+            message,
+            bot,
+            chat_id,
+            "Ваш аккаунт заблокирован. Свяжитесь с поддержкой, чтобы восстановить доступ.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+    if created:
+        await _send_start_reply(
+            message,
+            bot,
+            chat_id,
+            (
+                "Добро пожаловать! Подпишитесь на наш канал, чтобы получить "
+                f"стартовый бонус {settings.start_bonus} ⭐."
+            ),
+            reply_markup=main_menu_keyboard(),
+        )
+    else:
+        await _send_start_reply(
+            message,
+            bot,
+            chat_id,
+            "С возвращением!",
+            reply_markup=main_menu_keyboard(),
+        )
+
+    is_member, activated, start_bonus_awarded = await _verify_and_activate_subscription(
+        bot, settings, user
+    )
+    if not is_member:
+        await _send_start_reply(
+            message,
+            bot,
+            chat_id,
+            "Поделитесь ботом с друзьями и зарабатывайте звезды!",
+            reply_markup=subscribe_keyboard(settings.channel_username),
+        )
+    elif activated:
+        message_text = "Спасибо за подписку! Теперь бот доступен полностью."
+        if start_bonus_awarded:
+            message_text += f" Вам начислено {settings.start_bonus} ⭐ стартового бонуса."
+        await _send_start_reply(message, bot, chat_id, message_text)
+
+    bot_info = await bot.get_me()
+    await _send_start_reply(
+        message,
+        bot,
+        chat_id,
+        "Ваша персональная ссылка: https://t.me/{username}?start=ref{tg_id}".format(
+            username=bot_info.username,
+            tg_id=telegram_id,
+        ),
+    )
+
+
 @router.message(Command("start"))
 async def cmd_start(message: Message, command: CommandObject, bot: Bot, settings: Settings) -> None:
     telegram_id = message.from_user.id
@@ -215,49 +301,14 @@ async def cmd_start(message: Message, command: CommandObject, bot: Bot, settings
         if referred_by == telegram_id:
             referred_by = None
 
-    user, created = await _ensure_user_record(
-        telegram_id,
+    await run_start_flow(
+        bot,
         settings,
+        telegram_id,
+        message.chat.id,
         message.from_user.username,
-        referred_by,
-    )
-    if user.is_banned:
-        await message.answer(
-            "Ваш аккаунт заблокирован. Свяжитесь с поддержкой, чтобы восстановить доступ.",
-            reply_markup=main_menu_keyboard(),
-        )
-        return
-    if created:
-        await message.answer(
-            (
-                "Добро пожаловать! Подпишитесь на наш канал, чтобы получить "
-                f"стартовый бонус {settings.start_bonus} ⭐."
-            ),
-            reply_markup=main_menu_keyboard(),
-        )
-    else:
-        await message.answer("С возвращением!", reply_markup=main_menu_keyboard())
-
-    is_member, activated, start_bonus_awarded = await _verify_and_activate_subscription(
-        bot, settings, user
-    )
-    if not is_member:
-        await message.answer(
-            "Поделитесь ботом с друзьями и зарабатывайте звезды!",
-            reply_markup=subscribe_keyboard(settings.channel_username),
-        )
-    elif activated:
-        message_text = "Спасибо за подписку! Теперь бот доступен полностью."
-        if start_bonus_awarded:
-            message_text += f" Вам начислено {settings.start_bonus} ⭐ стартового бонуса."
-        await message.answer(message_text)
-
-    bot_info = await bot.get_me()
-    await message.answer(
-        "Ваша персональная ссылка: https://t.me/{username}?start=ref{tg_id}".format(
-            username=bot_info.username,
-            tg_id=telegram_id,
-        )
+        referred_by=referred_by,
+        message=message,
     )
 
 
