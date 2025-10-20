@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime
 from contextlib import suppress
-from typing import Optional
+from typing import Any, Optional
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.enums import ChatMemberStatus, ChatType
@@ -40,6 +40,10 @@ class SupportStates(StatesGroup):
 
 class AdminReplyStates(StatesGroup):
     waiting_for_reply = State()
+
+
+class AdminGrantStarsStates(StatesGroup):
+    waiting_for_details = State()
 
 
 async def _ensure_user_record(
@@ -205,6 +209,92 @@ async def ensure_subscription_access(
     return True
 
 
+async def _send_start_reply(
+    message: Optional[Message],
+    bot: Bot,
+    chat_id: int,
+    text: str,
+    **kwargs: Any,
+) -> Message:
+    if message is not None:
+        return await message.answer(text, **kwargs)
+    return await bot.send_message(chat_id, text, **kwargs)
+
+
+async def run_start_flow(
+    bot: Bot,
+    settings: Settings,
+    telegram_id: int,
+    chat_id: int,
+    username: Optional[str],
+    *,
+    referred_by: Optional[int] = None,
+    message: Optional[Message] = None,
+) -> None:
+    user, created = await _ensure_user_record(
+        telegram_id,
+        settings,
+        username,
+        referred_by,
+    )
+    if user.is_banned:
+        await _send_start_reply(
+            message,
+            bot,
+            chat_id,
+            "Ваш аккаунт заблокирован. Свяжитесь с поддержкой, чтобы восстановить доступ.",
+            reply_markup=main_menu_keyboard(),
+        )
+        return
+    if created:
+        await _send_start_reply(
+            message,
+            bot,
+            chat_id,
+            (
+                "Добро пожаловать! Подпишитесь на наш канал, чтобы получить "
+                f"стартовый бонус {settings.start_bonus} ⭐."
+            ),
+            reply_markup=main_menu_keyboard(),
+        )
+    else:
+        await _send_start_reply(
+            message,
+            bot,
+            chat_id,
+            "С возвращением!",
+            reply_markup=main_menu_keyboard(),
+        )
+
+    is_member, activated, start_bonus_awarded = await _verify_and_activate_subscription(
+        bot, settings, user
+    )
+    if not is_member:
+        await _send_start_reply(
+            message,
+            bot,
+            chat_id,
+            "Поделитесь ботом с друзьями и зарабатывайте звезды!",
+            reply_markup=subscribe_keyboard(settings.channel_username),
+        )
+    elif activated:
+        message_text = "Спасибо за подписку! Теперь бот доступен полностью."
+        if start_bonus_awarded:
+            message_text += f" Вам начислено {settings.start_bonus} ⭐ стартового бонуса."
+        await _send_start_reply(message, bot, chat_id, message_text)
+
+    bot_info = await bot.get_me()
+    await _send_start_reply(
+        message,
+        bot,
+        chat_id,
+        "Ваша персональная ссылка: https://t.me/{username}?start=ref{tg_id}".format(
+            username=bot_info.username,
+            tg_id=telegram_id,
+        ),
+    )
+
+
 @router.message(Command("start"))
 async def cmd_start(message: Message, command: CommandObject, bot: Bot, settings: Settings) -> None:
     telegram_id = message.from_user.id
@@ -215,49 +305,14 @@ async def cmd_start(message: Message, command: CommandObject, bot: Bot, settings
         if referred_by == telegram_id:
             referred_by = None
 
-    user, created = await _ensure_user_record(
-        telegram_id,
+    await run_start_flow(
+        bot,
         settings,
+        telegram_id,
+        message.chat.id,
         message.from_user.username,
-        referred_by,
-    )
-    if user.is_banned:
-        await message.answer(
-            "Ваш аккаунт заблокирован. Свяжитесь с поддержкой, чтобы восстановить доступ.",
-            reply_markup=main_menu_keyboard(),
-        )
-        return
-    if created:
-        await message.answer(
-            (
-                "Добро пожаловать! Подпишитесь на наш канал, чтобы получить "
-                f"стартовый бонус {settings.start_bonus} ⭐."
-            ),
-            reply_markup=main_menu_keyboard(),
-        )
-    else:
-        await message.answer("С возвращением!", reply_markup=main_menu_keyboard())
-
-    is_member, activated, start_bonus_awarded = await _verify_and_activate_subscription(
-        bot, settings, user
-    )
-    if not is_member:
-        await message.answer(
-            "Поделитесь ботом с друзьями и зарабатывайте звезды!",
-            reply_markup=subscribe_keyboard(settings.channel_username),
-        )
-    elif activated:
-        message_text = "Спасибо за подписку! Теперь бот доступен полностью."
-        if start_bonus_awarded:
-            message_text += f" Вам начислено {settings.start_bonus} ⭐ стартового бонуса."
-        await message.answer(message_text)
-
-    bot_info = await bot.get_me()
-    await message.answer(
-        "Ваша персональная ссылка: https://t.me/{username}?start=ref{tg_id}".format(
-            username=bot_info.username,
-            tg_id=telegram_id,
-        )
+        referred_by=referred_by,
+        message=message,
     )
 
 
@@ -810,6 +865,100 @@ async def admin_broadcast_start(
         reply_markup=admin_menu_keyboard(),
     )
     await callback.answer()
+
+
+@router.callback_query(F.data == "admin_grant_stars")
+async def admin_grant_stars_start(
+    callback: CallbackQuery, settings: Settings, state: FSMContext
+) -> None:
+    if callback.from_user.id not in settings.admin_ids:
+        await callback.answer("Доступ запрещен", show_alert=True)
+        return
+
+    await state.set_state(AdminGrantStarsStates.waiting_for_details)
+    await callback.message.edit_text(
+        (
+            "Введите через пробел ID пользователя или @username и количество ⭐,\n"
+            "например: 123456789 50.\n"
+            "Для отмены введите /cancel."
+        ),
+        reply_markup=admin_menu_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.message(AdminGrantStarsStates.waiting_for_details)
+async def admin_grant_stars_apply(
+    message: Message, settings: Settings, state: FSMContext
+) -> None:
+    if message.from_user.id not in settings.admin_ids:
+        await message.answer("Доступ запрещен.")
+        return
+
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("Укажите данные в формате: ID количество")
+        return
+
+    if text.lower() in {"/cancel", "отмена"}:
+        await state.clear()
+        await message.answer(
+            "Начисление отменено.", reply_markup=admin_menu_keyboard()
+        )
+        return
+
+    parts = text.split()
+    if len(parts) != 2:
+        await message.answer(
+            "Некорректный формат. Укажите ID (или @username) и количество через пробел."
+        )
+        return
+
+    user_ref, amount_text = parts
+    if user_ref.startswith("@"):
+        username = user_ref.lstrip("@")
+        user = await db.get_user_by_username(username)
+    else:
+        try:
+            telegram_id = int(user_ref)
+        except ValueError:
+            await message.answer("ID пользователя должен быть числом.")
+            return
+        user = await db.get_user(telegram_id)
+
+    if user is None:
+        await message.answer("Пользователь не найден в базе данных.")
+        return
+
+    try:
+        amount = int(amount_text)
+    except ValueError:
+        await message.answer("Количество ⭐ должно быть целым числом.")
+        return
+
+    if amount <= 0:
+        await message.answer("Количество ⭐ должно быть положительным.")
+        return
+
+    await db.update_balance(user.telegram_id, amount)
+
+    with suppress(TelegramBadRequest, TelegramForbiddenError):
+        await message.bot.send_message(
+            user.telegram_id,
+            (
+                f"Администрация начислила {amount} ⭐ на ваш баланс.\n"
+                "Если у вас есть вопросы, свяжитесь с поддержкой."
+            ),
+        )
+
+    await state.clear()
+    await message.answer(
+        (
+            f"У пользователя ID {user.telegram_id} начислено {amount} ⭐.\n"
+            "Уведомление отправлено."
+        ),
+        reply_markup=admin_menu_keyboard(),
+    )
 
 
 @router.message(AdminBroadcastStates.waiting_for_message)

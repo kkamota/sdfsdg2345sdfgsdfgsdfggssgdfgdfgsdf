@@ -21,6 +21,7 @@ class User:
     username: Optional[str]
     is_banned: bool
     start_bonus_claimed: bool
+    flyer_verified: bool
 
 
 @dataclass(slots=True)
@@ -59,6 +60,11 @@ class Database:
             "start_bonus_claimed",
             "INTEGER NOT NULL DEFAULT 1",
         )
+        await self._ensure_column(
+            "users",
+            "flyer_verified",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
         await self._execute(
             """
             CREATE TABLE IF NOT EXISTS withdrawals (
@@ -73,7 +79,7 @@ class Database:
 
     async def get_user(self, telegram_id: int) -> Optional[User]:
         row = await self._fetchone(
-            "SELECT telegram_id, balance, referred_by, is_subscribed, reward_claimed, last_daily_bonus, username, is_banned, start_bonus_claimed FROM users WHERE telegram_id = ?",
+            "SELECT telegram_id, balance, referred_by, is_subscribed, reward_claimed, last_daily_bonus, username, is_banned, start_bonus_claimed, flyer_verified FROM users WHERE telegram_id = ?",
             (telegram_id,),
         )
         if row is None:
@@ -88,6 +94,32 @@ class Database:
             username=row[6],
             is_banned=bool(row[7]),
             start_bonus_claimed=bool(row[8]),
+            flyer_verified=bool(row[9]),
+        )
+
+    async def get_user_by_username(self, username: str) -> Optional[User]:
+        row = await self._fetchone(
+            """
+            SELECT telegram_id, balance, referred_by, is_subscribed, reward_claimed,
+                   last_daily_bonus, username, is_banned, start_bonus_claimed, flyer_verified
+            FROM users
+            WHERE username = ? COLLATE NOCASE
+            """,
+            (username,),
+        )
+        if row is None:
+            return None
+        return User(
+            telegram_id=row[0],
+            balance=row[1],
+            referred_by=row[2],
+            is_subscribed=bool(row[3]),
+            reward_claimed=bool(row[4]),
+            last_daily_bonus=row[5],
+            username=row[6],
+            is_banned=bool(row[7]),
+            start_bonus_claimed=bool(row[8]),
+            flyer_verified=bool(row[9]),
         )
 
     async def create_user(
@@ -154,6 +186,12 @@ class Database:
         await self._execute(
             "UPDATE users SET start_bonus_claimed = ? WHERE telegram_id = ?",
             (int(claimed), telegram_id),
+        )
+
+    async def set_flyer_verified(self, telegram_id: int, verified: bool) -> None:
+        await self._execute(
+            "UPDATE users SET flyer_verified = ? WHERE telegram_id = ?",
+            (int(verified), telegram_id),
         )
 
     async def set_last_daily_bonus(self, telegram_id: int, timestamp: str | None) -> None:
@@ -232,7 +270,7 @@ class Database:
     async def list_all_users(self) -> list[User]:
         rows = await self._fetchall(
             """
-            SELECT telegram_id, balance, referred_by, is_subscribed, reward_claimed, last_daily_bonus, username, is_banned
+            SELECT telegram_id, balance, referred_by, is_subscribed, reward_claimed, last_daily_bonus, username, is_banned, start_bonus_claimed, flyer_verified
             FROM users
             ORDER BY telegram_id
             """,
@@ -247,6 +285,8 @@ class Database:
                 last_daily_bonus=row[5],
                 username=row[6],
                 is_banned=bool(row[7]),
+                start_bonus_claimed=bool(row[8]),
+                flyer_verified=bool(row[9]),
             )
             for row in rows
         ]
