@@ -22,7 +22,18 @@ def _extract_first(payload: dict[str, Any], paths: Iterable[Tuple[str, ...]]) ->
         for key in path:
             if not isinstance(current, dict):
                 break
-            current = current.get(key)
+            found = False
+            if key in current:
+                current = current.get(key)
+                found = True
+            elif isinstance(key, str):
+                for candidate, value in current.items():
+                    if isinstance(candidate, str) and candidate.strip() == key:
+                        current = value
+                        found = True
+                        break
+            if not found:
+                break
         else:
             return current
     return None
