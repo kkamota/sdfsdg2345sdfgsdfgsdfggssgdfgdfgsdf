@@ -13,6 +13,7 @@ from .config import Settings, load_settings
 from .database import db
 from .handlers import register_handlers
 from .middlewares import FlyerCheckMiddleware, ThrottlingMiddleware
+from .tasks import run_referral_audit
 from .webhook import create_app
 
 
@@ -55,10 +56,14 @@ async def main() -> None:
     server.install_signal_handlers = False
 
     server_task = asyncio.create_task(server.serve())
+    audit_task = asyncio.create_task(run_referral_audit(bot, settings))
 
     try:
         await dp.start_polling(bot)
     finally:
+        audit_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await audit_task
         if not server.should_exit:
             server.should_exit = True
         with suppress(asyncio.CancelledError):

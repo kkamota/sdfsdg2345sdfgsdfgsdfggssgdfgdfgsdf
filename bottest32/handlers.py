@@ -109,7 +109,10 @@ async def _update_admin_controls(
 
 
 async def _is_channel_member(bot: Bot, settings: Settings, telegram_id: int) -> bool:
-    member = await bot.get_chat_member(settings.channel_username, telegram_id)
+    try:
+        member = await bot.get_chat_member(settings.channel_username, telegram_id)
+    except (TelegramBadRequest, TelegramForbiddenError):
+        return False
     return member.status in {
         ChatMemberStatus.MEMBER,
         ChatMemberStatus.ADMINISTRATOR,

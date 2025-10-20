@@ -205,7 +205,7 @@ class Database:
             """
             SELECT referred_by, COUNT(*) as total
             FROM users
-            WHERE referred_by IS NOT NULL
+            WHERE referred_by IS NOT NULL AND is_subscribed = 1
             GROUP BY referred_by
             ORDER BY total DESC
             LIMIT ?
